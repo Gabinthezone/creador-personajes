@@ -1,11 +1,11 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { usePersonaje } from '@/composables/usePersonaje'
 import { useGuardado } from '@/composables/useGuardado'
-import { habilidadesPorClase } from '@/data/opciones'
+import { habilidadesPorClase, razas, clases } from '@/data/opciones'
 
 const {
-  personaje, razas, clases, razaActual, claseActual,
+  personaje, razas: razasList, clases: clasesList, razaActual, claseActual,
   atributosFinales, modificador, puntosVida, poderTotal,
   agregarHabilidad, eliminarHabilidad, cargarHabilidadesBase, resetear
 } = usePersonaje()
@@ -17,20 +17,71 @@ const mensaje = ref('')
 let timer = null
 
 // Las imágenes viven en public/img/razas/ y public/img/clases/
-// El nombre de archivo es el nombre sin tildes y en minúsculas (Pícaro -> picaro.png)
 const normalizar = (t = '') => t.toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
-
 const img = (item, carpeta) =>
   item ? `${import.meta.env.BASE_URL}img/${carpeta}/${normalizar(item.nombre || item.id)}.png` : ''
 const ocultarSiFalla = (e) => { e.target.style.visibility = 'hidden' }
 
-const habilidadesSugeridas = computed(() => habilidadesPorClase[personaje.claseId] || [])
+const habilidadesSugeridas = computed(() => {
+  const todas = habilidadesPorClase[personaje.claseId] || []
+  // Filtramos: solo dejamos las que NO estén ya en el arreglo de personaje.habilidades
+  return todas.filter(sug => 
+    !personaje.habilidades.some(h => h.nombre === sug)
+  )
+})
 
 onMounted(() => { guardados.value = listar() })
 
-watch(() => personaje.claseId, () => {
-  if (personaje.habilidades.length === 0) cargarHabilidadesBase()
-})
+// --- LÓGICA DE ALEATORIEDAD ---
+function generarAleatorio() {
+  // 1. Elegir nombre aleatorio simple (puedes expandir esta lista)
+  const nombres = ['Aragorn', 'Legolas', 'Gimli', 'Gandalf', 'Frodo', 'Arwen', 'Thorin', 'Elrond', 'Sauron', 'Galadriel']
+  const nombresAleatorios = nombres[Math.floor(Math.random() * nombres.length)]
+
+  // 2. Elegir raza y clase aleatoria
+  const razaAleatoria = razasList[Math.floor(Math.random() * razasList.length)]
+  const claseAleatoria = clasesList[Math.floor(Math.random() * clasesList.length)]
+
+  // 3. Elegir atributos aleatorios (entre 8 y 18)
+  const atributosAleatorios = {}
+  Object.keys(personaje.atributosBase).forEach(stat => {
+    atributosAleatorios[stat] = Math.floor(Math.random() * 11) + 8 // 8 a 18
+  })
+
+  // 4. Aplicar los cambios al personaje reactivo
+  personaje.nombre = nombresAleatorios + ' el ' + razaAleatoria.nombre
+  personaje.razaId = razaAleatoria.id
+  personaje.claseId = claseAleatoria.id
+  Object.assign(personaje.atributosBase, atributosAleatorios)
+
+  // 5. Cargar las 2 habilidades base de la clase elegida
+  cargarHabilidadesBase() 
+  
+  avisar('Personaje aleatorio generado')
+}
+
+// Al cambiar de clase: se reemplazan las habilidades de clase
+const HABILIDADES_BASE = 2
+const todasLasDeClase = Object.values(habilidadesPorClase).flat()
+
+function elegirClase(id) {
+  if (id === personaje.claseId) return
+  personaje.habilidades
+    .filter((h) => todasLasDeClase.includes(h.nombre))
+    .forEach((h) => eliminarHabilidad(h.id))
+  personaje.claseId = id
+  ;(habilidadesPorClase[id] || []).slice(0, HABILIDADES_BASE).forEach((nombre) => {
+    if (!personaje.habilidades.some((h) => h.nombre === nombre)) agregarHabilidad(nombre)
+  })
+}
+
+// Botones + / − de atributos
+const ATTR_MIN = 8
+const ATTR_MAX = 18
+function cambiarAtributo(stat, delta) {
+  const nuevo = personaje.atributosBase[stat] + delta
+  personaje.atributosBase[stat] = Math.min(ATTR_MAX, Math.max(ATTR_MIN, nuevo))
+}
 
 function avisar(texto, ms = 2500) {
   mensaje.value = texto
@@ -69,6 +120,10 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
     <header class="header">
       <h1>Forjador de Héroes</h1>
       <p>Crea tu leyenda, un atributo a la vez.</p>
+      <!-- BOTÓN ALEATORIO -->
+      <button type="button" class="btn-aleatorio" @click="generarAleatorio">
+         Personaje aleatorio
+      </button>
     </header>
 
     <transition name="fade">
@@ -76,7 +131,6 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
     </transition>
 
     <main class="layout">
-      <!-- ============ CONFIGURACIÓN ============ -->
       <section class="config">
         <div class="bloque">
           <h2>Nombre</h2>
@@ -88,46 +142,47 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
         </div>
 
         <div class="par">
-        <div class="bloque">
-          <h2>Raza</h2>
-          <div class="opciones">
-            <button
-              v-for="r in razas"
-              :key="r.id"
-              type="button"
-              class="opcion"
-              :class="{ activa: personaje.razaId === r.id }"
-              :aria-pressed="personaje.razaId === r.id"
-              @click="personaje.razaId = r.id"
-            >
-              <img :src="img(r, 'razas')" :alt="r.nombre" @error="ocultarSiFalla" />
-              <span>{{ r.nombre }}</span>
-            </button>
+          <div class="bloque">
+            <h2>Raza</h2>
+            <div class="opciones">
+              <button
+                v-for="r in razasList"
+                :key="r.id"
+                type="button"
+                class="opcion"
+                :class="{ activa: personaje.razaId === r.id }"
+                :aria-pressed="personaje.razaId === r.id"
+                @click="personaje.razaId = r.id"
+              >
+                <img :src="img(r, 'razas')" :alt="r.nombre" @error="ocultarSiFalla" />
+                <span>{{ r.nombre }}</span>
+              </button>
+            </div>
+            <p class="detalle">{{ razaActual?.descripcion }}</p>
+            <p v-if="razaActual?.rasgo" class="rasgo">{{ razaActual.rasgo }}</p>
           </div>
-          <p class="detalle">{{ razaActual?.descripcion }}</p>
-          <p v-if="razaActual?.rasgo" class="rasgo">{{ razaActual.rasgo }}</p>
+
+          <div class="bloque">
+            <h2>Clase</h2>
+            <div class="opciones">
+              <button
+                v-for="c in clasesList"
+                :key="c.id"
+                type="button"
+                class="opcion"
+                :class="{ activa: personaje.claseId === c.id }"
+                :aria-pressed="personaje.claseId === c.id"
+                @click="elegirClase(c.id)"
+              >
+                <img :src="img(c, 'clases')" :alt="c.nombre" @error="ocultarSiFalla" />
+                <span>{{ c.nombre }}</span>
+              </button>
+            </div>
+            <p class="detalle">{{ claseActual?.descripcion }}</p>
+          </div>
         </div>
 
-        <div class="bloque">
-          <h2>Clase</h2>
-          <div class="opciones">
-            <button
-              v-for="c in clases"
-              :key="c.id"
-              type="button"
-              class="opcion"
-              :class="{ activa: personaje.claseId === c.id }"
-              :aria-pressed="personaje.claseId === c.id"
-              @click="personaje.claseId = c.id"
-            >
-              <img :src="img(c, 'clases')" :alt="c.nombre" @error="ocultarSiFalla" />
-              <span>{{ c.nombre }}</span>
-            </button>
-          </div>
-          <p class="detalle">{{ claseActual?.descripcion }}</p>
-        </div>
-        </div>
-
+        <!-- Resumen de Atributos -->
         <div class="bloque">
           <h2>Atributos</h2>
           <div v-for="(valor, stat) in personaje.atributosBase" :key="stat" class="slider">
@@ -135,10 +190,24 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
             <input
               :id="'attr-' + stat"
               type="range"
-              min="8"
-              max="18"
+              :min="ATTR_MIN"
+              :max="ATTR_MAX"
               v-model.number="personaje.atributosBase[stat]"
             />
+            <div class="paso">
+              <button
+                type="button"
+                :aria-label="'Disminuir ' + stat"
+                :disabled="personaje.atributosBase[stat] <= ATTR_MIN"
+                @click="cambiarAtributo(stat, -1)"
+              >−</button>
+              <button
+                type="button"
+                :aria-label="'Aumentar ' + stat"
+                :disabled="personaje.atributosBase[stat] >= ATTR_MAX"
+                @click="cambiarAtributo(stat, 1)"
+              >+</button>
+            </div>
             <span class="valor">
               {{ atributosFinales[stat] }}
               <small>{{ signo(stat) }}</small>
@@ -185,7 +254,7 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
         </div>
       </section>
 
-      <!-- ============ VISTA PREVIA ============ -->
+      <!-- Vista previa -->
       <aside class="preview">
         <div class="heroe">
           <div class="heroe-cabecera">
@@ -195,6 +264,11 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
               <p>{{ razaActual?.nombre }} {{ claseActual?.nombre }}</p>
             </div>
           </div>
+
+          <!-- NUEVO: Fragmento de la historia de la raza -->
+          <p v-if="razaActual?.historia" class="historia">
+             {{ razaActual.historia }}
+          </p>
 
           <div class="resumen">
             <div><strong>{{ puntosVida }}</strong><span>Vida</span></div>
@@ -239,7 +313,6 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
 
 body {
   margin: 0;
-  /* Fondo: public/img/fondo.png, oscurecido para que el texto se lea bien */
   background:
     linear-gradient(rgba(20, 17, 15, .82), rgba(20, 17, 15, .92)),
     var(--bg) url('/img/fondo.png') center / cover fixed no-repeat;
@@ -251,8 +324,6 @@ body {
 
 * { box-sizing: border-box; }
 
-/* Anula la plantilla por defecto de Vue/Vite (main.css / base.css), que convierte
-   #app en una cuadrícula de 2 columnas y deja el contenido en la mitad izquierda */
 html body { display: block; place-items: unset; }
 html body #app {
   display: block;
@@ -267,6 +338,7 @@ html body #app {
 </style>
 
 <style scoped>
+/* ... (Tus estilos existentes se mantienen intactos) ... */
 .app { width: 100%; max-width: 1180px; margin: 0 auto; padding: 2.5rem 1.5rem 3rem; }
 
 /* Encabezado */
@@ -281,11 +353,29 @@ html body #app {
 }
 .header p { margin: 0; color: var(--suave); }
 
+/* NUEVO: Botón de aleatorio */
+.btn-aleatorio {
+  margin-top: 1rem;
+  padding: .6rem 1.2rem;
+  background: transparent;
+  border: 1px solid var(--acento);
+  border-radius: 8px;
+  color: var(--acento);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.btn-aleatorio:hover {
+  background: var(--acento);
+  color: var(--bg);
+}
+
 /* Layout */
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 2.5rem; align-items: start; }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; gap: 2rem; } }
 
-/* Bloques: separados por espacio y una línea fina, sin cajas */
+/* Bloques */
 .bloque { padding-bottom: 1.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--linea); }
 .bloque h2 {
   font-family: 'Cinzel', serif;
@@ -342,7 +432,26 @@ input:not([type='range']):focus { border-color: var(--acento); }
 .rasgo { margin: .35rem 0 0; color: var(--acento); font-size: .875rem; }
 
 /* Atributos */
-.slider { display: grid; grid-template-columns: 110px minmax(0, 1fr) 70px; align-items: center; gap: 1rem; margin-bottom: .75rem; }
+.slider { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto 70px; align-items: center; gap: 1rem; margin-bottom: .75rem; }
+.paso { display: flex; gap: .35rem; }
+.paso button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--superficie);
+  border: 1px solid var(--linea);
+  border-radius: 6px;
+  color: var(--texto);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.paso button:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
+.paso button:disabled { opacity: .3; cursor: not-allowed; }
 .slider label { color: var(--suave); font-size: .9rem; text-transform: capitalize; }
 .slider input[type='range'] { width: 100%; accent-color: var(--acento); }
 .valor { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -430,6 +539,19 @@ input:not([type='range']):focus { border-color: var(--acento); }
 .avatar { width: 88px; height: 88px; object-fit: contain; background: var(--elevada); border-radius: 50%; padding: .4rem; }
 .heroe-cabecera h2 { margin: 0; font-family: 'Cinzel', serif; font-size: 1.25rem; color: var(--acento); overflow-wrap: anywhere; }
 .heroe-cabecera p { margin: .15rem 0 0; color: var(--suave); font-size: .9rem; }
+
+/* NUEVO: Historia de la raza */
+.historia {
+  margin: 0 0 1.5rem;
+  padding: .75rem 1rem;
+  background: var(--superficie);
+  border-left: 3px solid var(--acento);
+  border-radius: 0 8px 8px 0;
+  font-size: .85rem;
+  line-height: 1.6;
+  color: var(--suave);
+  font-style: italic;
+}
 
 .resumen { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; padding: 1rem 0; border-block: 1px solid var(--linea); margin-bottom: 1.5rem; }
 .resumen strong { display: block; font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
