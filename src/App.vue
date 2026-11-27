@@ -14,6 +14,8 @@ const { guardar, listar, cargar, eliminar } = useGuardado()
 
 const guardados = ref([])
 const mensaje = ref('')
+const mostrarModal = ref(false)
+const idAEliminar = ref(null)
 let timer = null
 
 // Las imágenes viven en public/img/razas/ y public/img/clases/
@@ -108,8 +110,21 @@ function onCargar(id) {
 }
 
 function onEliminar(id) {
-  eliminar(id)
+  idAEliminar.value = id
+  mostrarModal.value = true
+}
+
+function confirmarEliminar() {
+  eliminar(idAEliminar.value)
   guardados.value = listar()
+  mostrarModal.value = false
+  idAEliminar.value = null
+  avisar('Personaje eliminado')
+}
+
+function cancelarEliminar() {
+  mostrarModal.value = false
+  idAEliminar.value = null
 }
 
 const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
@@ -293,6 +308,19 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
       </aside>
     </main>
   </div>
+      <!-- Modal de confirmación -->
+    <transition name="fade">
+      <div v-if="mostrarModal" class="modal-overlay" @click.self="cancelarEliminar">
+        <div class="modal-caja">
+          <h3>Eliminar personaje</h3>
+          <p>¿Estás seguro de que quieres eliminar este personaje? Esta acción no se puede deshacer.</p>
+          <div class="modal-acciones">
+            <button type="button" class="secundario" @click="cancelarEliminar">Cancelar</button>
+            <button type="button" class="btn-peligro" @click="confirmarEliminar">Sí, eliminar</button>
+          </div>
+        </div>
+      </div>
+    </transition>
 </template>
 
 <!-- Estilos globales (el bloque scoped no puede definir :root ni body) -->
@@ -582,6 +610,64 @@ input:not([type='range']):focus { border-color: var(--acento); }
 }
 .fade-enter-active, .fade-leave-active { transition: opacity .25s, transform .25s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(-8px); }
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .7);
+  backdrop-filter: blur(3px);
+  display: grid;
+  place-items: center;
+  z-index: 200;
+  padding: 1rem;
+}
+
+.modal-caja {
+  background: var(--superficie);
+  border: 1px solid var(--linea);
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 400px;
+  width: 100%;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, .5);
+}
+
+.modal-caja h3 {
+  font-family: 'Cinzel', serif;
+  color: var(--acento);
+  margin: 0 0 .75rem;
+  font-size: 1.25rem;
+}
+
+.modal-caja p {
+  color: var(--suave);
+  margin: 0 0 1.5rem;
+  font-size: .95rem;
+  line-height: 1.5;
+}
+
+.modal-acciones {
+  display: flex;
+  gap: .75rem;
+}
+
+.btn-peligro {
+  flex: 1;
+  padding: .8rem;
+  background: var(--peligro);
+  border: 1px solid var(--peligro);
+  border-radius: 8px;
+  color: white;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+
+.btn-peligro:hover {
+  opacity: .85;
+}
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
