@@ -2,12 +2,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { usePersonaje } from '@/composables/usePersonaje'
 import { useGuardado } from '@/composables/useGuardado'
-import { habilidadesPorClase, razas, clases } from '@/data/opciones'
+import { habilidadesPorClase } from '@/data/opciones'
 
 const {
   personaje, razas: razasList, clases: clasesList, razaActual, claseActual,
   atributosFinales, modificador, puntosVida, poderTotal,
-  agregarHabilidad, eliminarHabilidad, cargarHabilidadesBase, resetear
+  agregarHabilidad, eliminarHabilidad, resetear
 } = usePersonaje()
 
 const { guardar, listar, cargar, eliminar } = useGuardado()
@@ -18,6 +18,19 @@ const mostrarModal = ref(false)
 const idAEliminar = ref(null)
 let timer = null
 
+// --- LÓGICA DE PUNTOS EXTRA ---
+const PUNTOS_TOTALES = 20 // Puntos extra para repartir
+
+const puntosUsados = computed(() => {
+  return Object.values(personaje.atributosExtra).reduce((sum, val) => sum + val, 0)
+})
+
+const puntosRestantes = computed(() => PUNTOS_TOTALES - puntosUsados.value)
+
+// --- LÓGICA DE LÍMITE DE HABILIDADES ---
+const HABILIDADES_BASE = 2 // Tienes 2 de base por clase
+const MAX_HABILIDADES = 3 // El límite total es 3
+
 // Las imágenes viven en public/img/razas/ y public/img/clases/
 const normalizar = (t = '') => t.toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
 const img = (item, carpeta) =>
@@ -26,63 +39,111 @@ const ocultarSiFalla = (e) => { e.target.style.visibility = 'hidden' }
 
 const habilidadesSugeridas = computed(() => {
   const todas = habilidadesPorClase[personaje.claseId] || []
-  // Filtramos: solo dejamos las que NO estén ya en el arreglo de personaje.habilidades
-  return todas.filter(sug => 
+  return todas.filter(sug =>
     !personaje.habilidades.some(h => h.nombre === sug)
   )
 })
 
-onMounted(() => { guardados.value = listar() })
+// --- HABILIDADES DE CLASE ---
+const todasLasDeClase = Object.values(habilidadesPorClase).flat()
+
+// Quita todas las habilidades actuales y pone las 2 base de la clase indicada
+function aplicarHabilidadesClase(claseId) {
+  [...personaje.habilidades].forEach((h) => eliminarHabilidad(h.id))
+  ;(habilidadesPorClase[claseId] || []).slice(0, HABILIDADES_BASE).forEach((nombre) => {
+    agregarHabilidad(nombre)
+  })
+}
+
+onMounted(() => {
+  guardados.value = listar()
+  // Al iniciar, el personaje arranca con las 2 habilidades base de su clase
+  if (!personaje.habilidades.length) aplicarHabilidadesClase(personaje.claseId)
+})
 
 // --- LÓGICA DE ALEATORIEDAD ---
 function generarAleatorio() {
-  // 1. Elegir nombre aleatorio simple (puedes expandir esta lista)
   const nombres = ['Aragorn', 'Legolas', 'Gimli', 'Gandalf', 'Frodo', 'Arwen', 'Thorin', 'Elrond', 'Sauron', 'Galadriel']
-  const nombresAleatorios = nombres[Math.floor(Math.random() * nombres.length)]
+  const nombreAleatorio = nombres[Math.floor(Math.random() * nombres.length)]
 
-  // 2. Elegir raza y clase aleatoria
   const razaAleatoria = razasList[Math.floor(Math.random() * razasList.length)]
   const claseAleatoria = clasesList[Math.floor(Math.random() * clasesList.length)]
 
-  // 3. Elegir atributos aleatorios (entre 8 y 18)
-  const atributosAleatorios = {}
-  Object.keys(personaje.atributosBase).forEach(stat => {
-    atributosAleatorios[stat] = Math.floor(Math.random() * 11) + 8 // 8 a 18
-  })
+  // Repartimos los 20 puntos extra de forma aleatoria
+  const extras = { fuerza: 0, destreza: 0, constitucion: 0, inteligencia: 0, sabiduria: 0, carisma: 0 }
+  const stats = Object.keys(extras)
+  for (let i = 0; i < PUNTOS_TOTALES; i++) {
+    extras[stats[Math.floor(Math.random() * stats.length)]]++
+  }
 
-  // 4. Aplicar los cambios al personaje reactivo
-  personaje.nombre = nombresAleatorios + ' el ' + razaAleatoria.nombre
+  personaje.nombre = `${nombreAleatorio} el ${razaAleatoria.nombre}`
   personaje.razaId = razaAleatoria.id
   personaje.claseId = claseAleatoria.id
-  Object.assign(personaje.atributosBase, atributosAleatorios)
+  personaje.atributosExtra = extras
 
-  // 5. Cargar las 2 habilidades base de la clase elegida
-  cargarHabilidadesBase() 
-  
+  aplicarHabilidadesClase(claseAleatoria.id)
   avisar('Personaje aleatorio generado')
 }
 
-// Al cambiar de clase: se reemplazan las habilidades de clase
-const HABILIDADES_BASE = 2
-const todasLasDeClase = Object.values(habilidadesPorClase).flat()
+// Habilidades base de la clase actual (las que no se pueden editar ni quitar)
+const basesDeClase = computed(() =>
+  (habilidadesPorClase[personaje.claseId] || []).slice(0, HABILIDADES_BASE)
+)
+const esBase = (hab) => basesDeClase.value.includes(hab.nombre)
 
+// Al cambiar de clase: las base de la nueva clase van primero
+// y las habilidades personalizadas del usuario se conservan después
 function elegirClase(id) {
   if (id === personaje.claseId) return
-  personaje.habilidades
-    .filter((h) => todasLasDeClase.includes(h.nombre))
-    .forEach((h) => eliminarHabilidad(h.id))
+
+  const personalizadas = personaje.habilidades
+    .filter((h) => !todasLasDeClase.includes(h.nombre))
+    .map((h) => h.nombre)
+
+  ;[...personaje.habilidades].forEach((h) => eliminarHabilidad(h.id))
   personaje.claseId = id
+
   ;(habilidadesPorClase[id] || []).slice(0, HABILIDADES_BASE).forEach((nombre) => {
-    if (!personaje.habilidades.some((h) => h.nombre === nombre)) agregarHabilidad(nombre)
+    agregarHabilidad(nombre)
   })
+  personalizadas.forEach((nombre) => agregarHabilidad(nombre))
 }
 
-// Botones + / − de atributos
-const ATTR_MIN = 8
-const ATTR_MAX = 18
+// Resetear y volver a poner las habilidades base de la clase por defecto
+function onResetear() {
+  resetear()
+  aplicarHabilidadesClase(personaje.claseId)
+}
+
+// Botones + / − de atributos EXTRA
 function cambiarAtributo(stat, delta) {
-  const nuevo = personaje.atributosBase[stat] + delta
-  personaje.atributosBase[stat] = Math.min(ATTR_MAX, Math.max(ATTR_MIN, nuevo))
+  const valorActual = personaje.atributosExtra[stat]
+
+  if (delta > 0 && puntosRestantes.value <= 0) return
+  if (delta < 0 && valorActual <= 0) return
+
+  personaje.atributosExtra[stat] = Math.max(0, valorActual + delta)
+}
+
+// Slider: limita el valor a los puntos que aún quedan por repartir
+function setAtributo(stat, event) {
+  const actual = personaje.atributosExtra[stat]
+  const maximo = actual + puntosRestantes.value
+  const nuevo = Math.min(Math.max(0, Number(event.target.value)), maximo)
+  personaje.atributosExtra[stat] = nuevo
+  event.target.value = nuevo // evita que el thumb se quede más allá del límite
+}
+
+// --- FUNCIÓN PARA LIMITAR HABILIDADES ---
+function agregarHabilidadLocal(nombre = '') {
+  if (personaje.habilidades.length >= MAX_HABILIDADES) {
+    avisar('Límite de habilidades alcanzado (Máx 3)')
+    return
+  }
+
+  if (nombre && personaje.habilidades.some(h => h.nombre === nombre)) return
+
+  agregarHabilidad(nombre)
 }
 
 function avisar(texto, ms = 2500) {
@@ -197,46 +258,85 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
           </div>
         </div>
 
-        <!-- Resumen de Atributos -->
+        <!-- Atributos -->
         <div class="bloque">
-          <h2>Atributos</h2>
-          <div v-for="(valor, stat) in personaje.atributosBase" :key="stat" class="slider">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+            <h2 style="margin: 0;">Atributos</h2>
+            <span class="contador-puntos" :class="{ agotado: puntosRestantes === 0 }">
+              Puntos extra: {{ puntosRestantes }} / {{ PUNTOS_TOTALES }}
+            </span>
+          </div>
+
+          <div v-for="(extra, stat) in personaje.atributosExtra" :key="stat" class="slider">
             <label :for="'attr-' + stat">{{ stat }}</label>
+
             <input
               :id="'attr-' + stat"
               type="range"
-              :min="ATTR_MIN"
-              :max="ATTR_MAX"
-              v-model.number="personaje.atributosBase[stat]"
+              min="0"
+              :max="PUNTOS_TOTALES"
+              step="1"
+              :value="extra"
+              @input="setAtributo(stat, $event)"
             />
+
             <div class="paso">
               <button
                 type="button"
                 :aria-label="'Disminuir ' + stat"
-                :disabled="personaje.atributosBase[stat] <= ATTR_MIN"
+                :disabled="extra <= 0"
                 @click="cambiarAtributo(stat, -1)"
               >−</button>
+
               <button
                 type="button"
                 :aria-label="'Aumentar ' + stat"
-                :disabled="personaje.atributosBase[stat] >= ATTR_MAX"
+                :disabled="puntosRestantes <= 0"
                 @click="cambiarAtributo(stat, 1)"
               >+</button>
             </div>
+
             <span class="valor">
+              <!-- Total final: base de raza + extra -->
               {{ atributosFinales[stat] }}
-              <small>{{ signo(stat) }}</small>
+              <!-- +X en dorado solo si el jugador ha invertido puntos -->
+              <small v-if="extra > 0" style="color: var(--acento);">+{{ extra }}</small>
             </span>
           </div>
         </div>
 
+        <!-- Habilidades -->
         <div class="bloque">
-          <h2>Habilidades</h2>
-          <div v-for="hab in personaje.habilidades" :key="hab.id" class="habilidad">
-            <input v-model="hab.nombre" placeholder="Nombre de la habilidad" />
-            <button type="button" class="quitar" aria-label="Quitar habilidad" @click="eliminarHabilidad(hab.id)">✕</button>
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1rem;">
+            <h2 style="margin: 0;">Habilidades</h2>
+            <span class="contador-puntos" :class="{ agotado: personaje.habilidades.length >= MAX_HABILIDADES }">
+              Extra: {{ Math.max(0, personaje.habilidades.length - HABILIDADES_BASE) }} / 1
+            </span>
           </div>
-          <button type="button" class="agregar" @click="agregarHabilidad()">Añadir habilidad</button>
+
+          <div v-for="hab in personaje.habilidades" :key="hab.id" class="habilidad">
+            <input
+              v-model="hab.nombre"
+              placeholder="Nombre de la habilidad"
+              :disabled="esBase(hab)"
+            />
+            <button
+              type="button"
+              class="quitar"
+              aria-label="Quitar habilidad"
+              :disabled="esBase(hab)"
+              @click="eliminarHabilidad(hab.id)"
+            >✕</button>
+          </div>
+
+          <button
+            type="button"
+            class="agregar"
+            @click="agregarHabilidadLocal()"
+            :disabled="personaje.habilidades.length >= MAX_HABILIDADES"
+          >
+            Añadir habilidad
+          </button>
 
           <div v-if="habilidadesSugeridas.length" class="sugeridas">
             <span>Sugeridas</span>
@@ -245,14 +345,15 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
               :key="sug"
               type="button"
               class="chip"
-              @click="agregarHabilidad(sug)"
+              :disabled="personaje.habilidades.length >= MAX_HABILIDADES"
+              @click="agregarHabilidadLocal(sug)"
             >{{ sug }}</button>
           </div>
         </div>
 
         <div class="acciones">
           <button type="button" class="primario" @click="onGuardar">Guardar personaje</button>
-          <button type="button" class="secundario" @click="resetear">Resetear</button>
+          <button type="button" class="secundario" @click="onResetear">Resetear</button>
         </div>
 
         <div v-if="guardados.length" class="bloque">
@@ -280,7 +381,7 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
             </div>
           </div>
 
-          <!-- NUEVO: Fragmento de la historia de la raza -->
+          <!-- Fragmento de la historia de la raza -->
           <p v-if="razaActual?.historia" class="historia">
              {{ razaActual.historia }}
           </p>
@@ -296,7 +397,7 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
               <dt>{{ stat }}</dt>
               <dd>
                 {{ valor }}
-                <small :class="{ negativo: modificador(stat) < 0 }">{{ signo(stat) }}</small>
+                <small :class="{ negativo: modificador(stat) < 0 }">mod {{ signo(stat) }}</small>
               </dd>
             </div>
           </dl>
@@ -307,8 +408,8 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
         </div>
       </aside>
     </main>
-  </div>
-      <!-- Modal de confirmación -->
+
+    <!-- Modal de confirmación -->
     <transition name="fade">
       <div v-if="mostrarModal" class="modal-overlay" @click.self="cancelarEliminar">
         <div class="modal-caja">
@@ -321,9 +422,10 @@ const signo = (stat) => (modificador(stat) >= 0 ? '+' : '') + modificador(stat)
         </div>
       </div>
     </transition>
+  </div>
 </template>
 
-<!-- Estilos globales (el bloque scoped no puede definir :root ni body) -->
+<!-- Estilos globales -->
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600&display=swap');
 
@@ -365,8 +467,8 @@ html body #app {
 }
 </style>
 
+<!-- Estilos locales -->
 <style scoped>
-/* ... (Tus estilos existentes se mantienen intactos) ... */
 .app { width: 100%; max-width: 1180px; margin: 0 auto; padding: 2.5rem 1.5rem 3rem; }
 
 /* Encabezado */
@@ -381,7 +483,7 @@ html body #app {
 }
 .header p { margin: 0; color: var(--suave); }
 
-/* NUEVO: Botón de aleatorio */
+/* Botón aleatorio */
 .btn-aleatorio {
   margin-top: 1rem;
   padding: .6rem 1.2rem;
@@ -413,6 +515,22 @@ html body #app {
   color: var(--texto);
 }
 
+/* Contadores de puntos */
+.contador-puntos {
+  font-size: .85rem;
+  color: var(--suave);
+  background: var(--superficie);
+  padding: .2rem .6rem;
+  border-radius: 999px;
+  border: 1px solid var(--linea);
+  font-variant-numeric: tabular-nums;
+}
+.contador-puntos.agotado {
+  color: var(--peligro);
+  border-color: var(--peligro);
+  background: rgba(196, 87, 74, 0.1);
+}
+
 /* Inputs */
 input:not([type='range']) {
   width: 100%;
@@ -427,6 +545,10 @@ input:not([type='range']) {
 input::placeholder { color: var(--suave); opacity: .7; }
 input:focus-visible, button:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 input:not([type='range']):focus { border-color: var(--acento); }
+input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* Raza / clase */
 .par { display: grid; grid-template-columns: 1fr 1fr; column-gap: 2rem; }
@@ -496,7 +618,8 @@ input:not([type='range']):focus { border-color: var(--acento); }
   cursor: pointer;
   transition: color .15s, border-color .15s;
 }
-.quitar:hover { color: var(--peligro); border-color: var(--peligro); }
+.quitar:hover:not(:disabled) { color: var(--peligro); border-color: var(--peligro); }
+.quitar:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .agregar {
   width: 100%;
@@ -510,7 +633,8 @@ input:not([type='range']):focus { border-color: var(--acento); }
   cursor: pointer;
   transition: color .15s, border-color .15s;
 }
-.agregar:hover { color: var(--acento); border-color: var(--acento); }
+.agregar:hover:not(:disabled) { color: var(--acento); border-color: var(--acento); }
+.agregar:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .sugeridas { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: 1rem; }
 .sugeridas span { color: var(--suave); font-size: .85rem; margin-right: .25rem; }
@@ -525,7 +649,8 @@ input:not([type='range']):focus { border-color: var(--acento); }
   cursor: pointer;
   transition: border-color .15s, color .15s;
 }
-.chip:hover { border-color: var(--acento); color: var(--acento); }
+.chip:hover:not(:disabled) { border-color: var(--acento); color: var(--acento); }
+.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Acciones */
 .acciones { display: flex; gap: .75rem; margin-bottom: 2rem; }
@@ -568,7 +693,6 @@ input:not([type='range']):focus { border-color: var(--acento); }
 .heroe-cabecera h2 { margin: 0; font-family: 'Cinzel', serif; font-size: 1.25rem; color: var(--acento); overflow-wrap: anywhere; }
 .heroe-cabecera p { margin: .15rem 0 0; color: var(--suave); font-size: .9rem; }
 
-/* NUEVO: Historia de la raza */
 .historia {
   margin: 0 0 1.5rem;
   padding: .75rem 1rem;
